@@ -19,7 +19,7 @@
 #----------------------------------------------------------
 
 estserverurl="https://onboard-portal.it.unsw.edu.au"
-my_version="0.2.1-beta"
+my_version="0.3.0"
 
 scriptpath="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 datastore="$scriptpath/data"

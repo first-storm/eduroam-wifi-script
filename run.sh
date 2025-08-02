@@ -70,6 +70,8 @@ echo
 print_info "This tool will help you configure eduroam network access."
 print_info "You'll need either an ArubaQuickConnect.sh file OR an OTP code."
 echo
+print_info "Version: 0.3.0"
+echo
 
 # Initialize variables
 otp=""
