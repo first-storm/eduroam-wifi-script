@@ -4,7 +4,7 @@ This repository contains a set of scripts to simplify connecting to the UNSW edu
 
 ### Disclaimers
 
-**Original Author's Disclaimer:**
+**Disclaimer:**
 > I am not the author of this script, but I may add code to it. If you do not want my modifications, you can find the original release version in the releases section. This script was sent to me by UNSW IT via email, and I could not find it on any website, so I am sharing it with everyone. If UNSW does not want it to be shared and considers it a copyright violation, please contact me via email to have it removed.
 
 **AI Assistance Disclaimer:**
