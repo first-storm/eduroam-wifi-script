@@ -1,197 +1,78 @@
-**Disclaimer:** I am not the author of this script, but I may add code to it. If you do not want my modifications, you can find the original release version in the releases section. This script was sent to me by UNSW IT via email, and I could not find it on any website, so I am sharing it with everyone. If UNSW does not want it to be shared and considers it a copyright violation, please contact me via email to have it removed.
+# UNSW eduroam Setup Script for Linux
 
-# README
+This repository contains a set of scripts to simplify connecting to the UNSW eduroam WiFi network on Linux systems. It features an interactive setup assistant (`run.sh`) that guides you through the entire process, from certificate generation to network configuration.
 
-```
-#---------------------------------------------------------#
-#   ________    ______    _________      RFC 7030 + 8951  #
-#  |_   __  | .' ____ \  |  _   _  |                      #
-#    | |_ \_| | (___ \_| |_/ | | \_|                      #
-#    |  _| _   _.____`.      | |     -- A WiFi enabling   #
-#   _| |__/ | | \____) |    _| |_        shell script  -- #
-#  |________|  \______.'   |_____|                        #
-#   March 2025                            By Craig Martin #
-#---------------------------------------------------------#
-```
+### Disclaimers
 
-Enterprise Wifi uses certificates in place of passwords, which can be stollen by [WiFi attacks](https://en.wikipedia.org/wiki/Wireless_security). This is a stronger, although less convenient, means of authentication. In enterprise environment typically an agent or [MDM](https://en.wikipedia.org/wiki/Mobile_device_management) manages these certs.
+**Original Author's Disclaimer:**
+> I am not the author of this script, but I may add code to it. If you do not want my modifications, you can find the original release version in the releases section. This script was sent to me by UNSW IT via email, and I could not find it on any website, so I am sharing it with everyone. If UNSW does not want it to be shared and considers it a copyright violation, please contact me via email to have it removed.
 
-The [Aruba](https://en.wikipedia.org/wiki/Aruba_Networks) [Clearpass](https://arubanetworking.hpe.com/techdocs/ArubaDocPortal/content/cons-cp-home.htm) application uses the [Enrollment over Secure Transport](https://en.wikipedia.org/wiki/Enrollment_over_Secure_Transport) (EST) [protocol](https://datatracker.ietf.org/doc/html/rfc7030) to manage certs, but it only supports Ubuntu. Here we recreate those actions so we can bring wifi to *BSD systems, and Linux built without [glibc](https://www.gnu.org/software/libc/) (eg [Alpine](https://www.alpinelinux.org/) and other [musl](https://musl.libc.org/) based distro).
+**AI Assistance Disclaimer:**
+> The `run.sh` and `extract_certs.sh` scripts, along with this README file, were developed with the assistance of an AI programming assistant (GitHub Copilot) to improve functionality, user experience, and documentation.
 
-Requires Bash, [Curl](https://curl.se/), [OpenSSL](https://www.openssl.org/), and sed. Your package manager of choice (apt, homebrew, yum, nix etc) should have all these. Will run from WSL, MacOS, most Linux.
+## Overview
 
-Learn about [x509](https://en.wikipedia.org/wiki/X.509) and [ASN.1](https://en.wikipedia.org/wiki/ASN.1) with practical examples.
+The original `est-wifi-script.sh` handles the complex process of certificate enrollment. The new `run.sh` script acts as a user-friendly wrapper around it, automating the entire setup.
 
-**Please read the code before using.**
+### Features
 
-**This is not intended for general consumption - advanced users only.**
+- **Interactive Setup:** An easy-to-follow command-line assistant.
+- **Flexible Input:** Works with either an `ArubaQuickConnect.sh` file or a manually entered One-Time Password (OTP).
+- **Automated Certificate Handling:** Automatically generates device certificates and extracts the necessary CA certificate chain.
+- **NetworkManager Integration:** Automatically configures the eduroam connection in NetworkManager if available.
+- **Manual Fallback:** Provides clear manual setup instructions if you don't use NetworkManager.
 
-```
-SHA256:1a573a8ab1947f43ec2b45eba8388d7ddccd1eeea276e913f7b1cc270e3d02f6 est-wifi-script.sh (0.2.1-beta)
-```
+## Scripts in this Repository
 
-## est
+- `run.sh`: The main interactive setup script. **This is the script you should run.**
+- `extract_certs.sh`: A helper script to extract the UNSW root and issuing CA certificates from the configuration profile.
+- `est-wifi-script.sh`: The original script from UNSW IT that handles certificate enrollment over secure transport (EST).
 
-EST Layering of Protocols.
+## Prerequisites
 
-```
-   +--------------------------------------------+
-   | EST request / response messages            |
-   +--------------------------------------------+
-   | HTTP for message transfer and signaling    |
-   +--------------------------------------------+
-   | TLS for transport security                 |
-   +--------------------------------------------+
-   | TCP for transport                          |
-   +--------------------------------------------+
-```
+Before you begin, ensure you have the following command-line tools installed:
+- `bash`
+- `curl`
+- `openssl`
+- `nmcli` (for automatic NetworkManager configuration)
+- `xmllint` (often part of `libxml2-utils` or `libxml2`)
 
-The EST messages and their corresponding media types for each operation are:
-
-```
-   +--------------------+--------------------------+-------------------+
-   | Message type       | Request media type       | Request section(s)|
-   |                    | Response media type(s)   | Response section  |
-   | (per operation)    | Source(s) of types       |                   |
-   +====================+==========================+===================+
-   | Distribution of CA | N/A                      | Section 4.1       |
-   | Certificates       | application/pkcs7-mime   | Section 4.1.1     |
-   |                    | [RFC5751]                |                   |
-   | /cacerts           |                          |                   |
-   +--------------------+--------------------------+-------------------+
-   | Client Certificate | application/pkcs10       | Sections 4.2/4.2.1|
-   | Request Functions  | application/pkcs7-mime   | Section 4.2.2     |
-   |                    | [RFC5967] [RFC5751]      |                   |
-   | /simpleenroll      |                          |                   |
-   | /simplereenroll    |                          |                   |
-   +--------------------+--------------------------+-------------------+
-   | CSR Attributes     | N/A                      | Section 4.5.1     |
-   |                    | application/csrattrs     | Section 4.5.2     |
-   |                    | (This document)          |                   |
-   | /csrattrs          |                          |                   |
-   +--------------------+--------------------------+-------------------+
-```
-
-Process diagram:
-
-```
-┌────────────┐                     ┌────────────┐                      ┌────────────┐
-│ EST Client │                     │ EST Server │                      │   EST CA   │
-└─────┬──────┘                     └──────┬─────┘                      └──────┬─────┘
-      │                                   │                                   │
-      │     https post OTP and MAC        |                                   |
-      ├──────────────────────────────────►│                                   │
-      │                                   │                                   │
-      │       https get /cacerts          │                                   │
-      ├──────────────────────────────────►│                                   │
-      │                                   │                                   │
-      │             Trust chain           │                                   │
-      │◄──────────────────────────────────┤                                   │
-      │                                   │                                   │
-      │  Validate chain                   │                                   │
-      ├───────────────────┐               │                                   │
-      │                   │               │                                   │
-      │◄──────────────────┘               │                                   │
-      │                                   │                                   │
-      │  Generate key and CSR             │                                   │
-      ├───────────────────┐               │                                   │
-      │                   │               │                                   │
-      │◄──────────────────┘               │                                   │
-      │                                   │                                   │
-      │    https post CSR                 │                                   │
-      ├──────────────────────────────────►│                                   │
-      │                                   │                                   │
-      │                                   │ Validate client request           │
-      │                                   │                                   │
-      │                                   ├─────────────────────┐             │
-      │                                   │                     │             │
-      │                                   │◄────────────────────┘             │
-      │                                   │                                   │
-      │                                   │         Request certificate       │
-      │                                   ├──────────────────────────────────►│
-      │                                   │                                   │
-      │                                   │              Certificate          │
-      │                                   │◄──────────────────────────────────┤
-      │        PKCS#7 Certificate         │                                   │
-      │◄──────────────────────────────────┤                                   │
-      │                                   │                                   │
-      │                                   │                                   │
-```
-
-In first post sever will reply with a [plist](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/AboutInformationPropertyListFiles.html) file of [x-apple-aspen-config](https://developer.apple.com/documentation/devicemanagement/profile).
-
-#### Ref docs
-
-* https://en.wikipedia.org/wiki/IEEE_802.1X
-* https://github.com/santsys/aruba-clearpass-api
-* https://github.com/cisco/libest/
-* https://github.com/globalsign/est/
-
-## Using
-
-First obtain your 'One Time Password' from the portal. Change your browser to 'linux' to download `ArubaQuickConnect.sh`.
-
-In Chrome / Edge open "More Tools" --> "Developer Tools" --> Network Conditions --> User Agent:
-
-> Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36
-
-Extract your OTP:
-
+You can usually install them with your system's package manager. For example, on Debian/Ubuntu:
 ```shell
-cd ~/Downloads
-chmod +x ArubaQuickConnect.sh
-./ArubaQuickConnect.sh --check
-tail -n +505 ArubaQuickConnect.sh > ArubaQuickConnect.tar.gz
-tar -xf ArubaQuickConnect.tar.gz
-cat quickconnect/props/config.ini
+sudo apt-get update
+sudo apt-get install curl openssl network-manager libxml2-utils
 ```
 
-### config
+## How to Use
 
-All configuration is set by environment variables.
+1.  **Download the scripts**
+    Clone this repository or download the files to a directory on your computer.
 
-Export OTP:
+2.  **Get your OTP**
+    Download the `ArubaQuickConnect.sh` file for Linux by following the instructions at [UNSW Get Online for Linux](https://www.unsw.edu.au/get-online/standard-unsw-linux-device). The `run.sh` script can automatically extract the OTP from this file.
 
-```shell
-export est_otp="1234567890abcdef"
-```
+3.  **Make Scripts Executable**
+    Open a terminal, navigate to the directory containing the scripts, and run:
+    ```shell
+    chmod +x run.sh extract_certs.sh est-wifi-script.sh
+    ```
 
-Then your [MAC](https://en.wikipedia.org/wiki/MAC_address) address info:
+4.  **Run the Setup Assistant**
+    Execute the main script:
+    ```shell
+    ./run.sh
+    ```
 
-```shell
-export mac_wifi="98:BE:94:XX:XX:02"
-export mac_eth="98:BE:94:XX:XX:01"
-```
+5.  **Follow the Prompts**
+    The script will guide you through the following steps:
+    - Choosing your setup method (Aruba file or manual OTP).
+    - Entering your MAC address.
+    - Confirming certificate generation.
+    - Installing the CA certificate.
+    - Configuring NetworkManager with your zID and password.
 
-## using
+After the script finishes, you should be able to connect to the eduroam network.
 
-run:
+## Original Documentation
 
-```shell
-./est-wifi-script.sh --help
-./est-wifi-script.sh --enroll
-```
-
-### results
-
-In the plist xml file are two certificates. The PayloadContent describes what they are.
-
-Client cert:
-
-> Issuing Certification Authority
-
-And the root-ca cert:
-
-> Root Certification Authority
-
-Include the headers and footers for each cert:
-
-```
------BEGIN CERTIFICATE-----
-Your Certificate content here
------END CERTIFICATE-----
-```
-
-Create these two extra files, and now you can configure your Wifi.
-
-The client (your device) will present its certificate to the RADIUS server, and the server presents its certificate to the client, ensuring both parties are authenticated.
+For technical details about the certificate enrollment protocol (EST) and the original `est-wifi-script.sh`, please see the `README.old.md` file.
