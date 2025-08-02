@@ -42,16 +42,33 @@ set -o pipefail
 #----------------------------------------------------------
 
 
+#----------------------------------------------------------
+# UI Helpers (style like extract_certs.sh)
+#----------------------------------------------------------
+supports_color() { [ -t 1 ] && command -v tput >/dev/null && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; }
+if supports_color; then
+    C_BOLD="$(tput bold)"; C_RESET="$(tput sgr0)"
+    C_GREEN="$(tput setaf 2)"; C_YELLOW="$(tput setaf 3)"; C_RED="$(tput setaf 1)"; C_BLUE="$(tput setaf 4)"
+else
+    C_BOLD=""; C_RESET=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_BLUE=""
+fi
+QUIET=0
+info()  { [ "$QUIET" -eq 0 ] && echo "${C_BLUE}[*]${C_RESET} $*"; }
+success(){ [ "$QUIET" -eq 0 ] && echo "${C_GREEN}[✓]${C_RESET} $*"; }
+warn()  { echo "${C_YELLOW}[!]${C_RESET} $*" >&2; }
+err()   { echo "${C_RED}[x]${C_RESET} $*" >&2; }
+
+
 show_help() {
-    echo "
-    Using: ./est-script.sh [OPTION]
-        
-        --help           Show this help information (default)
-        --version        Show script version
-        
-        --enroll         Get a certificate
-        --reenroll       Renew the certificate
-    ";
+    cat <<EOF
+${C_BOLD}Using:${C_RESET} ./est-script.sh [OPTION]
+    
+    --help           Show this help information (default)
+    --version        Show script version
+    
+    --enroll         Get a certificate
+    --reenroll       Renew the certificate
+EOF
     exit 0;
 }
 
@@ -64,17 +81,17 @@ show_version() {
 
 check_dependencies() {
     if ! command -v curl &> /dev/null; then
-        echo "ERROR: curl is required but not installed or not in the PATH."
+        err "curl is required but not installed or not in the PATH."
         exit 1
     fi
 
     if ! command -v openssl &> /dev/null; then
-        echo "ERROR: openssl is required but not installed or not in the PATH."
+        err "openssl is required but not installed or not in the PATH."
         exit 1
     fi
 
     if ! command -v sed &> /dev/null; then
-        echo "ERROR: sed is required but not installed or not in the PATH."
+        err "sed is required but not installed or not in the PATH."
         exit 1
     fi
 }
@@ -82,46 +99,45 @@ check_dependencies() {
 
 checkvar_otp() {
     if [ -z "${est_otp}" ]; then
-        echo "ERROR: est_otp variable is not set."
+        err "est_otp variable is not set."
         exit 1
     fi
 
     otp_length=${#est_otp}
     if [ "$otp_length" -lt 10 ] || [ "$otp_length" -gt 40 ]; then
-        echo "ERROR: est_otp variable length is not within the range of 10 to 40 characters."
+        err "est_otp variable length is not within the range of 10 to 40 characters."
         exit 1
     else
-        echo "[*] check est_otp var"
+        info "check est_otp var"
     fi
 
     theotp=$est_otp
 
     if [ "$debugprint" -eq 1 ]; then
-        echo "[*] check est val: $theotp"
+        info "check est val: $theotp"
     fi
 }
 
 
 checkvar_macinfo() {
     if [ -z "$mac_wifi" ] || [ -z "$mac_eth" ]; then
-        echo "Error: Both mac_wifi and mac_eth must be set."
+        err "Both mac_wifi and mac_eth must be set."
         exit 1
     fi
 
-    # Regular expression for a valid MAC address
     mac_regex="^([0-9A-Fa-f]{2}:){5}([0-9A-Fa-f]{2})$"
 
     if [[ ! "$mac_wifi" =~ $mac_regex ]]; then
-        echo "Error: mac_wifi is not a valid MAC address."
+        err "mac_wifi is not a valid MAC address."
         exit 1
     else
-        echo "[*] check mac_wifi $mac_wifi";
+        info "check mac_wifi $mac_wifi";
     fi
     if [[ ! "$mac_eth" =~ $mac_regex ]]; then
-        echo "Error: mac_eth is not a valid MAC address."
+        err "mac_eth is not a valid MAC address."
         exit 1
     else
-        echo "[*] check mac_eth $mac_eth";
+        info "check mac_eth $mac_eth";
     fi
 }
 
@@ -130,10 +146,10 @@ check_uplink() {
     curl $estserverurl --silent > /dev/null 2>&1;
     thetimenow=$(date +"%H:%M:%S %d/%m/%y")
     if [ $? -ne 0 ]; then
-        echo "ERROR: can not reach EST server $thetimenow";
+        err "can not reach EST server $thetimenow";
         exit 1;
     else
-        echo "[*] internet seems OK $thetimenow";
+        info "internet seems OK $thetimenow";
     fi
 }
 
@@ -148,7 +164,7 @@ check_uplink() {
 # http post with OTP and MAC
 #
 estclient_hello() {
-    echo "[*] create and post auth payload";
+    info "create and post auth payload";
 
     # note system time needs to be correct by NTP
     thetimenow=$(date +%s)
@@ -178,7 +194,7 @@ EOF
         $estserverurl/onboard/mdps_qc_enroll.php 2> "$logdir"/curl_payload1.log
 
     if [ $? -ne 0 ]; then
-        echo "ERROR: auth post failed.";
+        err "auth post failed.";
         exit 1;
     fi
 
@@ -191,7 +207,7 @@ EOF
 # https://www.rfc-editor.org/rfc/rfc7030.html#section-4.1
 #
 get_cacerts() {
-    echo "[*] GET /cacerts from EST server";
+    info "GET /cacerts from EST server";
 
     curl \
         --tlsv1.2 \
@@ -203,7 +219,7 @@ get_cacerts() {
         $estserverurl/.well-known/est/qc:"$theotp"/cacerts 2> "$logdir"/curl_cacerts.log
 
     if [ $? -ne 0 ]; then
-        echo "ERROR: fetching cacerts failed.";
+        err "fetching cacerts failed.";
         exit 1;
     fi
 
@@ -216,9 +232,9 @@ get_cacerts() {
 # $ curl --cacert $datastore/ca_root.pem
 #
 get_cacerts_process() {
-    echo "[*] convert ca_root.bin to ca_root.pem for client trust anchor";
+    info "convert ca_root.bin to ca_root.pem for client trust anchor";
 
-    openssl pkcs7 -in "$datastore"/ca_root.bin -inform DER -out "$datastore"/ca_root.pem -outform PEM
+    openssl pkcs7 -in "$datastore"/ca_root.bin -inform DER -print_certs -out "$datastore"/ca_root.pem
 }
 
 
@@ -227,7 +243,7 @@ get_cacerts_process() {
 # https://www.rfc-editor.org/rfc/rfc7030.html#section-4.5
 #
 get_csrattr() {
-    echo "[*] GET /csrattrs info from EST server";
+    info "GET /csrattrs info from EST server";
 
     curl \
         --tlsv1.2 \
@@ -239,7 +255,7 @@ get_csrattr() {
         $estserverurl/.well-known/est/qc:"$theotp"/csrattrs 2> "$logdir"/curl_csrattr.log
 
     if [ $? -ne 0 ]; then
-        echo "ERROR: fetching csrattrs failed.";
+        err "fetching csrattrs failed.";
         exit 1;
     fi
 
@@ -254,17 +270,17 @@ get_csrattr() {
 estclient_csr_mykeys() {
     if [ ! -f "$datastore/private_key.pem" ]; then
         
-        echo "[*] create private key";
+        info "create private key";
         openssl genpkey -algorithm RSA \
             -out "$datastore"/private_key.pem \
             -pkeyopt rsa_keygen_bits:4096 &> /dev/null
         
         if [ $? -ne 0 ]; then
-            echo "ERROR: failed to gen private key.";
+            err "failed to gen private key.";
             exit 1;
         fi
     else
-        echo "[*] private key already exists";
+        info "private key already exists";
     fi
 
     ls -la -- "$datastore"/private_key.pem;
@@ -285,7 +301,7 @@ estclient_csr_mykeys() {
 # note: OpenSSL v3 discourages RSA-1 signatures - can cause errors
 #
 estclient_csr_gen() {
-    echo "[*] Create CSR config file";
+    info "Create CSR config file";
 
 cat <<EOF > "$datastore"/csr_config.cnf
 [ req ]
@@ -298,7 +314,7 @@ CN = Request Linux Certificate
 EOF
     ls -la -- "$datastore"/csr_config.cnf
 
-    echo "[*] Gen CSR cert";
+    info "Gen CSR cert";
     openssl req \
         -sha1 \
         -new -key "$datastore"/private_key.pem \
@@ -323,7 +339,7 @@ EOF
 #
 
 estclient_csr_post_new() {
-    echo "[*] POST csr_mydevice_fix.csr to /simpleenroll";
+    info "POST csr_mydevice_fix.csr to /simpleenroll";
 
     curl \
         --tlsv1.2 \
@@ -336,12 +352,12 @@ estclient_csr_post_new() {
         --data-binary @"$datastore"/csr_mydevice_fix.csr \
         $estserverurl/.well-known/est/qc:"$theotp"/simplereenroll 2> "$logdir"/curl_simpleenroll.log
 
-    echo "[*] Reply from CSR post simpleenroll";
+    info "Reply from CSR post simpleenroll";
     ls -la -- "$datastore"/csr_post_reply.b64
 }
 
 estclient_csr_post_exist() {
-    echo "[*] POST csr_mydevice_fix.csr to /simplereenroll";
+    info "POST csr_mydevice_fix.csr to /simplereenroll";
 
     curl \
         --tlsv1.2 \
@@ -354,7 +370,7 @@ estclient_csr_post_exist() {
         --data-binary @"$datastore"/csr_mydevice_fix.csr \
         $estserverurl/.well-known/est/qc:"$theotp"/simplereenroll 2> "$logdir"/curl_simplereenroll1.log
 
-    echo "[*] Reply from CSR post simpleReenroll";
+    info "Reply from CSR post simpleReenroll";
     ls -la -- "$datastore"/csr_post_reply.b64
 }
 
@@ -364,19 +380,19 @@ estclient_csr_post_exist() {
 # "$datastore"/csr_post_reply.b64
 #
 estclient_csr_certback() {
-    echo "[*] Assemble PKCS7 cert from CSR";
+    info "Assemble PKCS7 cert from CSR";
 
     echo "-----BEGIN PKCS7-----" > "$datastore"/client.pk
     cat "$datastore"/csr_post_reply.b64 >> "$datastore"/client.pk
     echo "-----END PKCS7-----" >> "$datastore"/client.pk
     ls -la -- "$datastore"/client.pk
 
-    echo "[*] convert client PKCS7 cert to pem";
+    info "convert client PKCS7 cert to pem";
     openssl pkcs7 -in "$datastore"/client.pk -print_certs > "$datastore"/client.pem
     ls -la -- "$datastore"/client.pem;
 
-    echo "[*] CSR Common name:";
-    openssl x509 -in "$datastore"/client.pem -text -noout | grep -i "CN" || { echo "BAD CSR Reply" && exit 1; }
+    info "CSR Common name:";
+    openssl x509 -in "$datastore"/client.pem -text -noout | grep -i "CN" || { err "BAD CSR Reply" && exit 1; }
 
     # should have same modulus as private_key.pem
     if [ "$debugprint" -eq 1 ]; then
@@ -421,7 +437,7 @@ estclient_wifi_client_cnf() {
 # https://www.rfc-editor.org/rfc/rfc7030.html#section-4.2.1
 #
 do_enroll() {
-    echo "[*] starting Enroll (new)";
+    info "starting Enroll (new)";
     check_dependencies;
     check_uplink;
     checkvar_otp;
@@ -435,7 +451,7 @@ do_enroll() {
     estclient_csr_post_new;
     estclient_csr_certback;
     estclient_wifi_client_cnf;
-    echo "[*] finished Enroll";
+    success "finished Enroll";
     exit 0;
 }
 
@@ -445,7 +461,7 @@ do_enroll() {
 # https://www.rfc-editor.org/rfc/rfc7030.html#section-4.2.2
 #
 do_reenroll() {
-    echo "[*] starting ReEnroll (existing)";
+    info "starting ReEnroll (existing)";
     check_dependencies;
     check_uplink;
     checkvar_otp;
@@ -453,7 +469,7 @@ do_reenroll() {
     estclient_csr_mykeys;
     estclient_hello;
     echo " TODO CSR";
-    echo "[*] finished ReEnroll";
+    success "finished ReEnroll";
     exit 0;
 }
 
