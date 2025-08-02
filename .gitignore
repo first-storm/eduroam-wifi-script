@@ -1,0 +1,10 @@
+# git ignore
+ignore/
+logs/**
+logs_win32/**
+data/**
+data_win32/**
+*.txt
+*.zip
+*.tar.gz
+.DS_Store
